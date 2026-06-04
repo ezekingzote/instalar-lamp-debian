@@ -7,26 +7,34 @@ AMARILLO='\033[1;33m'
 BLANCO='\033[1;37m'
 NC='\033[0m'
 
-clear
+PROJECT_FILE="$HOME/.laravel_project_path"
 
+mostrarTitulo() {
+clear
 echo -e "${CIAN}====================================================${NC}"
 echo -e "${BLANCO}         INSTALADOR DE RESCATE - EZEKINGZOTE        ${NC}"
 echo -e "${CIAN}====================================================${NC}"
-
 echo ""
-echo -e "${AMARILLO}Se solicitarán permisos de administrador una sola vez.${NC}"
+}
+
+solicitarSudo() {
+echo -e "${AMARILLO}Se solicitará la contraseña del usuario una sola vez.${NC}"
 sudo -v || exit 1
 
+```
 while true; do
-sudo -n true
-sleep 60
-kill -0 "$$" || exit
+    sudo -n true
+    sleep 60
+    kill -0 "$$" || exit
 done 2>/dev/null &
+```
+
+}
 
 instalarLamp() {
 
 ```
-echo -e "\n${CIAN}Instalando LAMP...${NC}"
+echo -e "\n${CIAN}Instalando Apache, MariaDB, PHP, Composer y Git...${NC}"
 
 sudo dpkg --configure -a
 
@@ -35,66 +43,55 @@ sudo apt update -y
 sudo DEBIAN_FRONTEND=noninteractive apt install -y \
     apache2 \
     mariadb-server \
+    git \
+    curl \
+    unzip \
     php \
     libapache2-mod-php \
-    php-mysql \
     php-cli \
     php-common \
+    php-mysql \
     php-curl \
     php-mbstring \
     php-xml \
     php-bcmath \
-    php-zip \
-    unzip \
-    curl \
-    git
+    php-zip
 
 sudo systemctl enable apache2
 sudo systemctl enable mariadb
 
-sudo systemctl start apache2
-sudo systemctl start mariadb
+sudo systemctl restart apache2
+sudo systemctl restart mariadb
+
+if ! command -v composer >/dev/null 2>&1; then
+
+    echo -e "\n${CIAN}Instalando Composer...${NC}"
+
+    cd /tmp || exit
+
+    php -r "copy('https://getcomposer.org/installer', 'composer-setup.php');"
+
+    php composer-setup.php
+
+    sudo mv composer.phar /usr/local/bin/composer
+
+    sudo chmod +x /usr/local/bin/composer
+
+fi
 
 echo -e "${VERDE}LAMP instalado correctamente.${NC}"
 ```
 
 }
 
-instalarComposer() {
-
-```
-if command -v composer >/dev/null 2>&1; then
-    echo -e "${VERDE}Composer ya está instalado.${NC}"
-    return
-fi
-
-echo -e "\n${CIAN}Instalando Composer...${NC}"
-
-cd /tmp || exit
-
-php -r "copy('https://getcomposer.org/installer', 'composer-setup.php');"
-
-php composer-setup.php
-
-sudo mv composer.phar /usr/local/bin/composer
-
-sudo chmod +x /usr/local/bin/composer
-
-composer --version
-
-echo -e "${VERDE}Composer instalado.${NC}"
-```
-
-}
-
-configurarLaravel() {
+instalarLaravel() {
 
 ```
 echo ""
 
 read -p "URL del repositorio Git: " REPO_URL
 
-read -p "Nombre de la base de datos: " DB_NAME
+read -p "Nombre de la Base de Datos: " DB_NAME
 
 read -p "Usuario MySQL: " DB_USER
 
@@ -103,27 +100,28 @@ echo ""
 
 PROJECT_NAME=$(basename "$REPO_URL" .git)
 
-PROJECT_PATH="/var/www/$PROJECT_NAME"
+PROJECT_PATH="/var/www/html/$PROJECT_NAME"
+
+echo -e "\n${CIAN}Clonando proyecto...${NC}"
 
 if [ -d "$PROJECT_PATH" ]; then
-    echo -e "${AMARILLO}La carpeta ya existe.${NC}"
+    echo -e "${AMARILLO}La carpeta ya existe. Se utilizará la existente.${NC}"
 else
-    echo -e "\n${CIAN}Clonando proyecto...${NC}"
     sudo git clone "$REPO_URL" "$PROJECT_PATH" || exit 1
 fi
 
-sudo chown -R $USER:$USER "$PROJECT_PATH"
+sudo chown -R "$USER:$USER" "$PROJECT_PATH"
 
 cd "$PROJECT_PATH" || exit 1
 
 if [ ! -f artisan ]; then
-    echo -e "${ROJO}El repositorio no parece ser un proyecto Laravel.${NC}"
-    exit 1
+    echo -e "${ROJO}El repositorio no parece ser Laravel.${NC}"
+    return
 fi
 
-instalarComposer
+echo "$PROJECT_PATH" > "$PROJECT_FILE"
 
-echo -e "\n${CIAN}Creando base de datos...${NC}"
+echo -e "\n${CIAN}Creando Base de Datos...${NC}"
 
 sudo mysql <<EOF
 ```
@@ -150,7 +148,7 @@ if [ ! -f .env ]; then
     else
 
         echo -e "${ROJO}No existe .env.example${NC}"
-        exit 1
+        return
 
     fi
 
@@ -162,25 +160,31 @@ sed -i "s/^DB_DATABASE=.*/DB_DATABASE=$DB_NAME/" .env
 sed -i "s/^DB_USERNAME=.*/DB_USERNAME=$DB_USER/" .env
 sed -i "s/^DB_PASSWORD=.*/DB_PASSWORD=$DB_PASS/" .env
 
-echo -e "\n${CIAN}Instalando dependencias Laravel...${NC}"
+echo -e "\n${CIAN}Instalando dependencias Composer...${NC}"
 
 composer install --ignore-platform-reqs
 
+echo -e "\n${CIAN}Generando APP_KEY...${NC}"
 php artisan key:generate
 
+echo -e "\n${CIAN}Creando enlace Storage...${NC}"
 php artisan storage:link
 
+echo -e "\n${CIAN}Ejecutando Migraciones y Seeders...${NC}"
 php artisan migrate --seed --force
+
+echo -e "\n${CIAN}Asignando permisos...${NC}"
+
+sudo chmod -R 777 storage
+sudo chmod -R 777 bootstrap/cache
 
 sudo chown -R www-data:www-data "$PROJECT_PATH"
 
-sudo chmod -R 775 storage
-sudo chmod -R 775 bootstrap/cache
-
-echo -e "${VERDE}Proyecto Laravel configurado correctamente.${NC}"
+echo -e "\n${VERDE}Proyecto Laravel instalado correctamente.${NC}"
 
 echo ""
-echo -e "${VERDE}Ruta:${NC} $PROJECT_PATH"
+echo "Ruta del proyecto:"
+echo "$PROJECT_PATH"
 ```
 
 }
@@ -188,36 +192,23 @@ echo -e "${VERDE}Ruta:${NC} $PROJECT_PATH"
 levantarLaravel() {
 
 ```
-read -p "Ruta del proyecto Laravel: " PROJECT_PATH
-
-cd "$PROJECT_PATH" || exit 1
-
-if [ ! -f artisan ]; then
-    echo -e "${ROJO}No se encontró artisan.${NC}"
+if [ ! -f "$PROJECT_FILE" ]; then
+    echo -e "${ROJO}No existe un proyecto Laravel registrado.${NC}"
     return
 fi
 
-php artisan serve --host=0.0.0.0
-```
+PROJECT_PATH=$(cat "$PROJECT_FILE")
 
-}
+if [ ! -d "$PROJECT_PATH" ]; then
+    echo -e "${ROJO}La carpeta del proyecto ya no existe.${NC}"
+    return
+fi
 
-actualizarProyecto() {
+cd "$PROJECT_PATH" || return
 
-```
-read -p "Ruta del proyecto: " PROJECT_PATH
+echo -e "\n${VERDE}Iniciando servidor Laravel...${NC}\n"
 
-cd "$PROJECT_PATH" || exit 1
-
-git pull
-
-composer install --ignore-platform-reqs
-
-php artisan migrate --force
-
-php artisan optimize:clear
-
-echo -e "${VERDE}Proyecto actualizado.${NC}"
+php artisan serve --host=0.0.0.0 --port=8000
 ```
 
 }
@@ -227,24 +218,49 @@ instalarTodo() {
 ```
 instalarLamp
 
-configurarLaravel
+instalarLaravel
 
-echo -e "\n${VERDE}INSTALACIÓN COMPLETADA.${NC}"
+echo -e "\n${VERDE}Instalación completada.${NC}"
 ```
 
 }
+
+solicitarSudo
 
 while true
 do
 
 ```
-echo ""
+mostrarTitulo
+
 echo "1) Instalar LAMP"
-echo "2) Clonar y configurar Laravel"
+echo "   - Apache"
+echo "   - MariaDB"
+echo "   - PHP"
+echo "   - Composer"
+echo "   - Git"
+echo ""
+
+echo "2) Instalar Proyecto Laravel"
+echo "   - Clonar repositorio"
+echo "   - Crear Base de Datos"
+echo "   - Copiar .env.example"
+echo "   - Configurar .env"
+echo "   - Composer Install"
+echo "   - Key Generate"
+echo "   - Storage Link"
+echo "   - Migrate Seed"
+echo ""
+
 echo "3) Levantar Laravel"
-echo "4) Actualizar proyecto"
-echo "5) Instalar TODO"
-echo "6) Salir"
+echo "   - php artisan serve"
+echo ""
+
+echo "4) Instalar Todo"
+echo "   - Ejecuta 1 + 2"
+echo ""
+
+echo "5) Salir"
 echo ""
 
 read -p "Seleccione una opción: " OPCION
@@ -256,7 +272,7 @@ case $OPCION in
     ;;
 
     2)
-        configurarLaravel
+        instalarLaravel
     ;;
 
     3)
@@ -264,14 +280,10 @@ case $OPCION in
     ;;
 
     4)
-        actualizarProyecto
-    ;;
-
-    5)
         instalarTodo
     ;;
 
-    6)
+    5)
         exit 0
     ;;
 
@@ -280,6 +292,9 @@ case $OPCION in
     ;;
 
 esac
+
+echo ""
+read -p "Presione ENTER para continuar..."
 ```
 
 done
